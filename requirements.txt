@@ -1,26 +1,9 @@
-# === API Framework ===
-# Framework web para criar os endpoints
 fastapi
-
-# Servidor ASGI que "roda" o FastAPI
 uvicorn[standard]
-
-# === Data Science & ML ===
-# Para ler e manipular os dados do .csv
-pandas==2.2.1
-
-# Base para pandas e scikit-learn
-numpy
-
-# A biblioteca de Machine Learning (Pipeline, Modelo, Métricas)
-scikit-learn==1.5.0
-
-# Para salvar/carregar o modelo de forma eficiente (otimizado para numpy)
-joblib
-
-# === Segurança & Uploads ===
-# Necessário para o FastAPI receber uploads de arquivos
 python-multipart
-
-# Para criar os arquivos .zip criptografados com senha (AES)
-pyzipper 
+pandas
+scikit-learn
+joblib
+dahuffman
+statsmodels
+azure-storage-blob

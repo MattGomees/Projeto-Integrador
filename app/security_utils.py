@@ -1,61 +1,82 @@
-# app/security_utils.py
-import zipfile
-import io  # Para manipulação de arquivos em memória
-from typing import Tuple
-
+import os
 import pandas as pd
-from fastapi import UploadFile
-from starlette.responses import StreamingResponse
+from dahuffman import HuffmanCodec
+from collections import Counter
+import json
+import io
 
-# Define um nome padrão para os arquivos dentro do zip
-DEFAULT_CSV_NAME = "predictions.csv"
-DEFAULT_ZIP_NAME = "predictions.zip"
+def _xor_cipher(data: bytes, key: str) -> bytes:
+    """
+    Criptografa ou descriptografa dados usando um XOR simples.
+    É simétrico: aplicar a mesma função duas vezes retorna o original.
+    """
+    key_bytes = key.encode('utf-8')
+    key_len = len(key_bytes)
+    return bytes(b ^ key_bytes[i % key_len] for i, b in enumerate(data))
 
-def unzip_csv_from_upload(upload_file: UploadFile) -> pd.DataFrame:
+def secure_file(file_path: str, output_name: str, key: str) -> (str, str):
+    """
+    Lê um arquivo CSV, o comprime com Huffman (conforme aula) e
+    o criptografa com XOR (conforme solicitado).
 
-    # 1. Verifica se é um arquivo zip
-    if upload_file.content_type not in ['application/zip', 'application/x-zip-compressed']:
-        raise ValueError("Arquivo inválido. Por favor, envie um .zip.")
+    Salva dois arquivos: os dados (.huff) e a tabela de frequência (.freq)
+    necessária para a descompressão.
+    """
+    
+    # 1. Ler os dados como string (Huffman na aula foi em string)
+    with open(file_path, 'r', encoding='utf-8') as f:
+        data_str = f.read()
 
-    # 2. Lê o conteúdo do UploadFile para um buffer em memória
-    zip_buffer = io.BytesIO(upload_file.file.read())
-
-    # 3. Abre o arquivo ZIP a partir do buffer
-    with zipfile.ZipFile(zip_buffer, 'r') as zip_ref:
+    # 2. Calcular frequências (como em Compressão_de_Dados.ipynb)
+    freq = Counter(data_str)
+    
+    # 3. Criar codec (como em Compressão_de_Dados.ipynb)
+    codec = HuffmanCodec.from_frequencies(freq)
+    
+    # 4. Codificar dados
+    encoded_data = codec.encode(data_str)
+    
+    # 5. Criptografar dados codificados
+    encrypted_data = _xor_cipher(encoded_data, key)
+    
+    # 6. Salvar dados binários criptografados
+    data_file_name = f"{output_name}.huff"
+    with open(data_file_name, 'wb') as f:
+        f.write(encrypted_data)
         
-        # 4. Lista todos os arquivos dentro do ZIP
-        all_files = zip_ref.namelist()
+    # 7. Salvar tabela de frequência (necessário para descompressão)
+    freq_file_name = f"{output_name}.freq.json"
+    with open(freq_file_name, 'w', encoding='utf-8') as f:
+        json.dump(dict(freq), f) # Salva como dict normal
         
-        # 5. Encontra o primeiro arquivo .csv
-        csv_filename = None
-        for f in all_files:
-            if f.endswith('.csv'):
-                csv_filename = f
-                break
+    return data_file_name, freq_file_name
+
+def unsecure_file(data_file_path: str, freq_file_path: str, key: str, output_csv_name: str) -> str:
+    """
+    Descriptografa um arquivo .huff usando XOR e o descomprime
+    usando a tabela de frequência .freq. Salva como .csv.
+    """
+    
+    # 1. Ler a tabela de frequência
+    with open(freq_file_path, 'r', encoding='utf-8') as f:
+        freq_dict = json.load(f)
+        freq = Counter(freq_dict)
+
+    # 2. Recriar o codec (como em Compressão_de_Dados.ipynb)
+    codec = HuffmanCodec.from_frequencies(freq)
+    
+    # 3. Ler os dados binários criptografados
+    with open(data_file_path, 'rb') as f:
+        encrypted_data = f.read()
         
-        if csv_filename is None:
-            raise ValueError("Nenhum arquivo .csv encontrado dentro do .zip.")
-
-        # 6. Lê o conteúdo do .csv para outro buffer em memória
-        with zip_ref.open(csv_filename) as csv_file:
-            # 7. Usa Pandas para ler o CSV e criar o DataFrame
-            df = pd.read_csv(csv_file)
-            return df
-
-def zip_csv_to_response(df: pd.DataFrame) -> StreamingResponse:
-    zip_buffer = io.BytesIO()
-    csv_string = df.to_csv(index=False, encoding='utf-8')
-
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        zip_file.writestr(DEFAULT_CSV_NAME, csv_string)
-
-    zip_buffer.seek(0)
-
-    # 5. Retorna a resposta
-    return StreamingResponse(
-        zip_buffer,
-        media_type="application/x-zip-compressed",
-        headers={
-            'Content-Disposition': f'attachment; filename={DEFAULT_ZIP_NAME}'
-        }
-    )
+    # 4. Descriptografar dados
+    encoded_data = _xor_cipher(encrypted_data, key)
+        
+    # 5. Decodificar (como em Compressão_de_Dados.ipynb)
+    decoded_str = codec.decode(encoded_data)
+    
+    # 6. Salvar string decodificada de volta para CSV
+    with open(output_csv_name, 'w', encoding='utf-8') as f:
+        f.write(decoded_str)
+        
+    return output_csv_name
