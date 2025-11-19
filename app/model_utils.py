@@ -6,30 +6,25 @@ from sklearn.metrics import r2_score, mean_squared_error
 import numpy as np
 from sklearn.decomposition import PCA
 import os
+import warnings
+from statsmodels.tools.sm_exceptions import ConvergenceWarning
 
-# Modelos do Prof. Miro
+warnings.simplefilter('ignore', ConvergenceWarning)
+warnings.simplefilter('ignore', UserWarning)
+
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.arima.model import ARIMA
 
 
 def load_data(file_path):
-    """Carrega os dados do CSV."""
     df = pd.read_csv(file_path)
-
-    # --- CORREÇÃO (PATCH 3) ---
     if 'time' not in df.columns:
         return df
-    # --- FIM DA CORREÇÃO ---
-
     df['time'] = pd.to_numeric(df['time'], errors='coerce')
     df = df.dropna(subset=['time'])
     return df
 
 def preprocess_data(df, test_size=0.2):
-    """
-    Prepara os dados para os modelos.
-    NOTA: shuffle=False é CRÍTICO para Séries Temporais.
-    """
     X = df.drop('time', axis=1)
     y = df['time']
     
@@ -37,45 +32,38 @@ def preprocess_data(df, test_size=0.2):
         X, y, test_size=test_size, shuffle=False 
     )
 
-    # --- Pipeline 1 (Base PI) -> MinMaxScaler ---
     scaler_minmax = MinMaxScaler()
     X_train_scaled_minmax = scaler_minmax.fit_transform(X_train_df)
     X_test_scaled_minmax = scaler_minmax.transform(X_test_df)
 
-    # --- Pipelines 2 (PCA), 3 (Ridge), 4 (Lasso) -> StandardScaler ---
     scaler_std = StandardScaler()
     X_train_scaled_std = scaler_std.fit_transform(X_train_df)
     X_test_scaled_std = scaler_std.transform(X_test_df)
     
-    # Pipeline 2 (PCA)
-    pca = PCA(n_components=0.95) 
+    pca = PCA(n_components=0.90) 
     X_train_pca = pca.fit_transform(X_train_scaled_std)
     X_test_pca = pca.transform(X_test_scaled_std)
     
-    # Para Validação Cruzada
     X_full_scaled_minmax = scaler_minmax.transform(X) 
     X_full_scaled_std = scaler_std.transform(X)       
     X_full_pca = pca.transform(X_full_scaled_std)       
 
     return (
-        (X_train_scaled_minmax, X_test_scaled_minmax, scaler_minmax), # Pip 1
-        (X_train_pca, X_test_pca, scaler_std, pca),                 # Pip 2
-        (X_train_scaled_std, X_test_scaled_std, scaler_std),        # Pips 3 e 4
-        (y_train, y_test),                                          # Pips 5 e 6
-        (X_full_scaled_minmax, X_full_pca, X_full_scaled_std, y)    # Para Validação
+        (X_train_scaled_minmax, X_test_scaled_minmax, scaler_minmax),
+        (X_train_pca, X_test_pca, scaler_std, pca),
+        (X_train_scaled_std, X_test_scaled_std, scaler_std),
+        (y_train, y_test),
+        (X_full_scaled_minmax, X_full_pca, X_full_scaled_std, y)
     )
 
 def get_expected_performance_sklearn(X_full_scaled_minmax, X_full_pca, X_full_scaled_std, y):
-    """
-    Usa TimeSeriesSplit (Prof. Miro) para avaliar os 4 modelos sklearn.
-    """
     tscv = TimeSeriesSplit(n_splits=5)
     
     models = {
         "linear_minmax": LinearRegression(),
         "linear_pca": LinearRegression(),
         "ridge": Ridge(alpha=1.0),
-        "lasso": Lasso(alpha=1.0)
+        "lasso": Lasso(alpha=0.1)
     }
     
     data_X = {
@@ -95,7 +83,7 @@ def get_expected_performance_sklearn(X_full_scaled_minmax, X_full_pca, X_full_sc
             model = models[model_name]
             model.fit(X_train, y_train)
             try:
-                score = model.score(X_test, y_test) # R²
+                score = model.score(X_test, y_test)
                 results[model_name].append(score)
             except:
                  results[model_name].append(np.nan) 
@@ -108,47 +96,115 @@ def get_expected_performance_sklearn(X_full_scaled_minmax, X_full_pca, X_full_sc
     )
 
 def train_sklearn_model(X_train, y_train, model_type='linear'):
-    """Treina os modelos sklearn (Linear, Ridge, Lasso)."""
     if model_type == 'linear':
         model = LinearRegression()
     elif model_type == 'ridge':
         model = Ridge(alpha=1.0) 
     elif model_type == 'lasso':
-        model = Lasso(alpha=1.0) 
+        model = Lasso(alpha=0.1) 
     model.fit(X_train, y_train)
     return model
 
 def train_holtwinters_model(y_train, y_test):
-    """
-    Treina o modelo Holt-Winters (Prof. Miro)
-    """
-    hw_model = ExponentialSmoothing(
-        y_train, 
-        trend='add', 
-        seasonal='add', 
-        seasonal_periods=5 
-    ).fit()
+    best_aic = float('inf')
+    best_model = None
     
-    y_pred_hw = hw_model.forecast(steps=len(y_test))
+    configs = [
+        {'trend': 'add', 'seasonal': None},
+        {'trend': 'add', 'seasonal': 'add', 'seasonal_periods': 5},
+        {'trend': None, 'seasonal': 'add', 'seasonal_periods': 5}
+    ]
+    
+    for config in configs:
+        try:
+            model = ExponentialSmoothing(
+                y_train, 
+                trend=config.get('trend'), 
+                seasonal=config.get('seasonal'), 
+                seasonal_periods=config.get('seasonal_periods')
+            ).fit()
+            
+            if model.aic < best_aic:
+                best_aic = model.aic
+                best_model = model
+        except:
+            continue
+            
+    if best_model is None:
+        best_model = ExponentialSmoothing(y_train).fit()
+
+    y_pred_hw = best_model.forecast(steps=len(y_test))
     expected_r2 = r2_score(y_test, y_pred_hw)
-    return hw_model, expected_r2
+    return best_model, expected_r2
 
 def train_arima_model(y_train, y_test):
-    """
-    Treina o modelo ARIMA (Prof. Miro)
-    """
-    arima_model = ARIMA(y_train, order=(1, 1, 1)).fit()
-    y_pred_arima = arima_model.forecast(steps=len(y_test))
-    expected_r2 = r2_score(y_test, y_pred_arima)
-    return arima_model, expected_r2
+    best_aic = float('inf')
+    best_order = (1, 1, 1)
+    best_model_fit = None
+    
+    p_values = [0, 1, 2, 4]
+    d_values = [0, 1]
+    q_values = [0, 1, 2]
+    
+    for p in p_values:
+        for d in d_values:
+            for q in q_values:
+                try:
+                    model = ARIMA(y_train, order=(p, d, q))
+                    model_fit = model.fit()
+                    
+                    if model_fit.aic < best_aic:
+                        best_aic = model_fit.aic
+                        best_order = (p, d, q)
+                        best_model_fit = model_fit
+                except:
+                    continue
+    
+    if best_model_fit is None:
+        best_model_fit = ARIMA(y_train, order=(1, 1, 1)).fit()
 
-# --- REMOVIDO: Função train_lstm_model ---
+    y_pred_arima = best_model_fit.forecast(steps=len(y_test))
+    expected_r2 = r2_score(y_test, y_pred_arima)
+    
+    return best_model_fit, expected_r2
 
 def preprocess_unseen_data(X_unseen, scaler_minmax, scaler_std, pca):
-    """Aplica as transformações aprendidas (Scalers e PCA) aos novos dados."""
-    
     X_unseen_scaled_minmax = scaler_minmax.transform(X_unseen)
     X_unseen_scaled_std = scaler_std.transform(X_unseen)
     X_unseen_pca = pca.transform(X_unseen_scaled_std)
-    
     return X_unseen_scaled_minmax, X_unseen_pca, X_unseen_scaled_std
+
+def train_models(X_train_scaled, X_test_scaled, 
+                 X_train_pca, X_test_pca,
+                 X_train_scaled_std, X_test_scaled_std,
+                 y_train, y_test):
+    
+    model_scaled = train_sklearn_model(X_train_scaled, y_train, model_type='linear')
+    pred_scaled = model_scaled.predict(X_test_scaled)
+    r2_scaled = r2_score(y_test, pred_scaled)
+
+    model_pca = train_sklearn_model(X_train_pca, y_train, model_type='linear')
+    pred_pca = model_pca.predict(X_test_pca)
+    r2_pca = r2_score(y_test, pred_pca)
+
+    model_ridge = train_sklearn_model(X_train_scaled_std, y_train, model_type='ridge')
+    pred_ridge = model_ridge.predict(X_test_scaled_std)
+    r2_ridge = r2_score(y_test, pred_ridge)
+
+    model_lasso = train_sklearn_model(X_train_scaled_std, y_train, model_type='lasso')
+    pred_lasso = model_lasso.predict(X_test_scaled_std)
+    r2_lasso = r2_score(y_test, pred_lasso)
+
+    model_hw, r2_hw = train_holtwinters_model(y_train, y_test)
+    model_arima, r2_arima = train_arima_model(y_train, y_test)
+
+    metrics = {
+        "Linear_Scaled_R2": r2_scaled,
+        "Linear_PCA_R2": r2_pca,
+        "Ridge_R2": r2_ridge,
+        "Lasso_R2": r2_lasso,
+        "HoltWinters_R2": r2_hw,
+        "ARIMA_R2": r2_arima
+    }
+
+    return model_scaled, model_pca, model_ridge, model_lasso, model_hw, model_arima, metrics

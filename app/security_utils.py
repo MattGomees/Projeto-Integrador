@@ -6,22 +6,11 @@ import json
 import io
 
 def _xor_cipher(data: bytes, key: str) -> bytes:
-    """
-    Criptografa ou descriptografa dados usando um XOR simples.
-    É simétrico: aplicar a mesma função duas vezes retorna o original.
-    """
     key_bytes = key.encode('utf-8')
     key_len = len(key_bytes)
     return bytes(b ^ key_bytes[i % key_len] for i, b in enumerate(data))
 
 def secure_file(file_path: str, output_name: str, key: str) -> (str, str):
-    """
-    Lê um arquivo CSV, o comprime com Huffman (conforme aula) e
-    o criptografa com XOR (conforme solicitado).
-
-    Salva dois arquivos: os dados (.huff) e a tabela de frequência (.freq)
-    necessária para a descompressão.
-    """
     
     # 1. Ler os dados como string (Huffman na aula foi em string)
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -47,15 +36,11 @@ def secure_file(file_path: str, output_name: str, key: str) -> (str, str):
     # 7. Salvar tabela de frequência (necessário para descompressão)
     freq_file_name = f"{output_name}.freq.json"
     with open(freq_file_name, 'w', encoding='utf-8') as f:
-        json.dump(dict(freq), f) # Salva como dict normal
+        json.dump(dict(freq), f) 
         
     return data_file_name, freq_file_name
 
 def unsecure_file(data_file_path: str, freq_file_path: str, key: str, output_csv_name: str) -> str:
-    """
-    Descriptografa um arquivo .huff usando XOR e o descomprime
-    usando a tabela de frequência .freq. Salva como .csv.
-    """
     
     # 1. Ler a tabela de frequência
     with open(freq_file_path, 'r', encoding='utf-8') as f:
