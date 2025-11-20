@@ -19,7 +19,7 @@ st.set_page_config(
 )
 
 # URL da API (Backend)
-API_URL = "http://localhost:8000"
+API_URL = "http://pi-fastapi-backend-eac6a6dfayh0hxgy.canadacentral-01.azurewebsites.net"
 
 # -------------------------
 # FUNÇÃO DE LIMPEZA DE NOMES

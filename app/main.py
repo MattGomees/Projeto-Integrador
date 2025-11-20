@@ -13,8 +13,9 @@ from statsmodels.tsa.holtwinters.results import HoltWintersResults
 from statsmodels.tsa.arima.model import ARIMAResults
 
 # Nossos módulos locais
-import model_utils
-import security_utils
+# Substitua as linhas originais por estas:
+from . import model_utils
+from . import security_utils
 
 from azure.storage.blob import BlobServiceClient
 
