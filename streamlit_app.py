@@ -19,25 +19,35 @@ st.set_page_config(
 )
 
 # URL da API (Backend)
+# IMPORTANTE: Use o localhost para teste local. Use a URL do Azure para deploy.
+# Se estiver testando localmente, mude para: API_URL = "http://localhost:8000"
 API_URL = "https://pi-fastapi-backend-eac6a6dfayh0hxgy.canadacentral-01.azurewebsites.net"
 
 # -------------------------
 # FUNÇÃO DE LIMPEZA DE NOMES
 # -------------------------
 def format_model_name(technical_name):
-    """Transforma nomes técnicos feios em nomes comerciais bonitos."""
+    """Transforma nomes técnicos feios em nomes comerciais bonitos.
+       Atualizado para 7 modelos e chaves do Backend."""
+    
+    # Remove o prefixo 'predicted_' se houver
     name = technical_name.replace("predicted_", "")
+    
     mapping = {
         "1_Linear_MinMax": "Linear (MinMax)",
         "2_Linear_PCA": "Linear (PCA)",
-        "3.Ridge_L2": "Ridge Regression",
         "3_Ridge_L2": "Ridge Regression",
-        "4.Lasso_L1": "Lasso Regression",
         "4_Lasso_L1": "Lasso Regression",
-        "5_HoltWinters": "Holt-Winters",
-        "6_ARIMA": "ARIMA"
+        "5_ElasticNet": "Elastic Net", 
+        "6_HoltWinters": "Holt-Winters",
+        "7_ARIMA": "ARIMA",
+        # Inclui chaves antigas por segurança:
+        "3.Ridge_L2": "Ridge Regression",
+        "4.Lasso_L1": "Lasso Regression",
     }
+    
     if name in mapping: return mapping[name]
+    # Busca por parte do nome para lidar com os 'predicted_X_...'
     for key, nice_name in mapping.items():
         if key in name: return nice_name
     return name
@@ -153,12 +163,12 @@ with col_train_info:
         <h4>🔍 Processo de Treino</h4>
         <ul>
             <li>Envio para API FastAPI.</li>
-            <li>Treino de <b>6 Modelos</b> na nuvem.</li>
+            <li>Treino de <b>7 Modelos</b> na nuvem.</li>
             <li>Persistência no <b>Azure Blob Storage</b>.</li>
             <li>Cálculo de <b>R² Esperado</b> (Validação Temporal).</li>
         </ul>
     </div>
-    """, unsafe_allow_html=True)
+    """, unsafe_allow_html=True) # CORREÇÃO: Mudei de 6 para 7 Modelos
 
 with col_train_action:
     train_file = st.file_uploader("📂 Upload da Base de Treino (.csv)", type=["csv"], key="train")
@@ -182,14 +192,26 @@ with col_train_action:
                             if response.status_code == 200:
                                 st.toast("Treino concluído!", icon="✅")
                                 
-                                # --- PROCESSAMENTO DOS DADOS ---
-                                perf_dict = result["expected_performance_R2_comparison"]
-                                clean_perf_dict = {format_model_name(k): v for k, v in perf_dict.items()}
-                                perf_df = pd.DataFrame.from_dict(clean_perf_dict, orient='index', columns=['R2'])
-                                perf_df = perf_df.sort_values(by="R2", ascending=False)
+                                # --- PROCESSAMENTO DOS DADOS (Full Metrics) ---
+                                full_metrics_data = result.get("full_expected_performance_metrics", {})
                                 
-                                best_model = perf_df['R2'].idxmax()
-                                best_r2 = perf_df['R2'].max()
+                                # 1. Puxa o nome do vencedor do Ranking MCDA
+                                best_model_tech_name = full_metrics_data.pop("best_model_tech_name", None)
+
+                                # 2. Cria o DataFrame para exibição (apenas com as métricas)
+                                clean_perf_dict = {format_model_name(k): v for k, v in full_metrics_data.items()}
+                                perf_df = pd.DataFrame.from_dict(clean_perf_dict, orient='index')
+                                perf_df.index.name = 'Modelo'
+                                
+                                # 3. Define o melhor modelo e R2
+                                if best_model_tech_name:
+                                     best_model = format_model_name(best_model_tech_name)
+                                     best_r2 = full_metrics_data[best_model_tech_name]["R2"]
+                                     perf_df = perf_df.sort_values(by="R2", ascending=False)
+                                else:
+                                     perf_df = perf_df.sort_values(by="R2", ascending=False)
+                                     best_model = perf_df['R2'].idxmax()
+                                     best_r2 = perf_df['R2'].max()
                                 
                                 st.markdown("### 🏆 Resultado do Treinamento")
                                 
@@ -206,29 +228,31 @@ with col_train_action:
                                     """, unsafe_allow_html=True)
                                 
                                 with c2:
-                                    st.caption("Ranking Completo")
-                                    st.dataframe(perf_df, use_container_width=True, height=250)
+                                    st.caption("Ranking Completo (R², RMSE, MAE)")
+                                    # CORREÇÃO: Removido 'column_format'
+                                    st.dataframe(perf_df.style.format({"R2": "{:.4f}", "RMSE": "{:.4f}", "MAE": "{:.4f}"}), 
+                                                 use_container_width=True, height=250) 
                                 
                                 with c3:
-                                    st.caption("Comparativo Visual")
-                                    perf_df_chart = perf_df.reset_index().rename(columns={'index': 'Modelo'})
+                                    st.caption("Comparativo Visual (R²)")
+                                    perf_df_chart = perf_df.reset_index().rename(columns={'Modelo': 'Modelo'})
                                     chart = alt.Chart(perf_df_chart).mark_bar().encode(
                                         x=alt.X('R2', scale=alt.Scale(zero=False), title="R² Score"),
                                         y=alt.Y('Modelo', sort='-x', title=""),
                                         color=alt.Color('R2', scale=alt.Scale(scheme='blues'), legend=None),
-                                        tooltip=['Modelo', 'R2']
+                                        tooltip=['Modelo', 'R2', 'RMSE', 'MAE']
                                     ).properties(height=250)
                                     st.altair_chart(chart, use_container_width=True)
                                 
-                                st.session_state.history.append({"Hora": datetime.now().strftime("%H:%M"), "Ação": "Treino", "Status": "Sucesso"})
+                                st.session_state.history.append({"Hora": datetime.now().strftime("%H:%M"), "Ação": "Treino", "Status": "Sucesso (7 Modelos)"})
                             else:
                                 st.error(f"Erro: {result.get('detail')}")
                         except Exception as e:
                             st.error(f"Erro: {e}")
             else:
                 st.error("Colunas incorretas.")
-        except:
-            st.error("Erro ao ler CSV.")
+        except Exception as e:
+             st.error(f"Erro ao ler CSV: {e}")
 
 st.markdown("---")
 
@@ -268,17 +292,15 @@ with col_test_action:
                     response = requests.post(f"{API_URL}/predict", files=files)
                     
                     if response.status_code == 200:
-                        # --- AQUI ESTÁ A CORREÇÃO: SALVAR NA SESSÃO ---
                         st.session_state.test_results = response.json()
                         st.toast("Predição concluída!", icon="✅")
                         st.session_state.history.append({"Hora": datetime.now().strftime("%H:%M"), "Ação": "Predição", "Status": "Sucesso"})
                     else:
-                        st.error("Erro na API.")
+                        st.error(f"Erro na API: {response.json().get('detail', 'Desconhecido')}")
                 except Exception as e:
                     st.error(f"Erro crítico: {e}")
 
         # --- RENDERIZAÇÃO (FORA DO IF DO BOTÃO) ---
-        # Se existirem resultados na memória, mostre-os (independente do botão ter sido clicado agora)
         if st.session_state.test_results is not None:
             res = st.session_state.test_results
             
@@ -301,29 +323,31 @@ with col_test_action:
                 if 'true_time' in df_results.columns:
                     st.markdown("### 📊 Real vs Previsto")
                     
-                    # Preparação dos dados
+                    # Preparação dos dados para o gráfico
                     pred_cols = [c for c in df_results.columns if c.startswith('predicted_')]
                     col_map = {c: format_model_name(c) for c in pred_cols}
                     reverse_map = {v: k for k, v in col_map.items()}
                     
                     default_ix = 0
                     if isinstance(perf_real, dict):
-                        perf_flat = {k: v["R2_Score"] for k, v in perf_real.items()}
-                        best_tech_name = max(perf_flat, key=perf_flat.get)
-                        for i, col in enumerate(pred_cols):
-                            if best_tech_name.split('_')[1] in col:
-                                default_ix = i
-                                break
-
-                    # O Selectbox agora não reinicia a tela inteira
+                        # Puxa o R2 do modelo com melhor R2 para definir o modelo padrão do Selectbox
+                        perf_flat = {k: v["R2_Score"] for k, v in perf_real.items() if isinstance(v, dict) and "R2_Score" in v}
+                        
+                        if perf_flat: # Garante que há dados de R2
+                            best_tech_name = max(perf_flat, key=perf_flat.get)
+                            for i, col in enumerate(pred_cols):
+                                if best_tech_name.split('_')[1] in col:
+                                    default_ix = i
+                                    break
+                        
                     selected_nice_name = st.selectbox(
-                        "Escolha o modelo:", 
+                        "Escolha o modelo para o Gráfico:", 
                         list(col_map.values()), 
                         index=default_ix
                     )
                     selected_col = reverse_map[selected_nice_name]
                     
-                    # Gráfico de Linha
+                    # Gráfico de Linha (sem alteração)
                     chart_data = pd.DataFrame({
                         'Índice': range(len(df_results)),
                         'Real': df_results['true_time'],
@@ -339,11 +363,32 @@ with col_test_action:
                     ).properties(height=350).interactive()
                     st.altair_chart(line_chart, use_container_width=True)
 
-                    # Ranking de Barras (Teste)
+                    # Ranking de Barras e Tabela (Teste)
                     if isinstance(perf_real, dict):
-                        clean_perf_real = {format_model_name(k): v["R2_Score"] for k, v in perf_real.items()}
-                        df_perf = pd.DataFrame.from_dict(clean_perf_real, orient='index', columns=['R2'])
-                        df_chart = df_perf.reset_index().rename(columns={'index': 'Modelo'})
+                        
+                        # Processa para o DataFrame de métricas completo
+                        df_data = {}
+                        for tech_name, metrics in perf_real.items():
+                             nice_name = format_model_name(tech_name)
+                             # Garante que metrics é um dicionário antes de tentar o get
+                             if isinstance(metrics, dict):
+                                 df_data[nice_name] = {
+                                     'R2': metrics.get("R2_Score"),
+                                     'RMSE': metrics.get("RMSE"),
+                                     'MAE': metrics.get("MAE")
+                                 }
+
+                        df_perf = pd.DataFrame.from_dict(df_data, orient='index')
+                        df_perf.index.name = 'Modelo'
+                        df_perf = df_perf.sort_values(by="R2", ascending=False)
+                        
+                        st.markdown("##### 📝 Desempenho Real (R², RMSE, MAE)")
+                        # CORREÇÃO: Removido 'column_format'
+                        st.dataframe(df_perf.style.format({"R2": "{:.4f}", "RMSE": "{:.4f}", "MAE": "{:.4f}"}), 
+                                     use_container_width=True, height=200) 
+                        
+                        # Prepara para o gráfico de barras (apenas R2)
+                        df_chart = df_perf.reset_index().rename(columns={'Modelo': 'Modelo'})
                         
                         bar_chart = alt.Chart(df_chart).mark_bar().encode(
                             x=alt.X('R2', scale=alt.Scale(zero=False)),

@@ -1,8 +1,8 @@
 import pandas as pd
 from sklearn.model_selection import train_test_split, TimeSeriesSplit
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from sklearn.linear_model import LinearRegression, Ridge, Lasso
-from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 import numpy as np
 from sklearn.decomposition import PCA
 import os
@@ -16,15 +16,28 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.arima.model import ARIMA
 
 
+def _winsorize_features(df, lower_quantile=0.01, upper_quantile=0.99):
+    df_copy = df.copy()
+    feature_cols = [col for col in df_copy.columns if col.startswith('time-')]
+    
+    for col in feature_cols:
+        if df_copy[col].dtype in ['float64', 'int64']:
+            lower_bound = df_copy[col].quantile(lower_quantile)
+            upper_bound = df_copy[col].quantile(upper_quantile)
+            df_copy[col] = np.clip(df_copy[col], lower_bound, upper_bound)
+    return df_copy
+
 def load_data(file_path):
     df = pd.read_csv(file_path)
     if 'time' not in df.columns:
         return df
     df['time'] = pd.to_numeric(df['time'], errors='coerce')
-    df = df.dropna(subset=['time'])
+    df = df.dropna()
     return df
 
 def preprocess_data(df, test_size=0.2):
+    df_clean = _winsorize_features(df)
+
     X = df.drop('time', axis=1)
     y = df['time']
     
@@ -63,17 +76,19 @@ def get_expected_performance_sklearn(X_full_scaled_minmax, X_full_pca, X_full_sc
         "linear_minmax": LinearRegression(),
         "linear_pca": LinearRegression(),
         "ridge": Ridge(alpha=1.0),
-        "lasso": Lasso(alpha=0.1)
+        "lasso": Lasso(alpha=0.1),
+	"elasticnet": ElasticNet(alpha=0.1, l1_ratio=0.5)
     }
     
     data_X = {
         "linear_minmax": X_full_scaled_minmax,
         "linear_pca": X_full_pca,
         "ridge": X_full_scaled_std,
-        "lasso": X_full_scaled_std
+        "lasso": X_full_scaled_std,
+	"elasticnet": X_full_scaled_std
     }
     
-    results = { "linear_minmax": [], "linear_pca": [], "ridge": [], "lasso": [] }
+    results = { name: {'R2': [], 'RMSE': [], 'MAE': []} for name in models }
 
     for model_name in models:
         for train_index, test_index in tscv.split(data_X[model_name]):
@@ -83,17 +98,25 @@ def get_expected_performance_sklearn(X_full_scaled_minmax, X_full_pca, X_full_sc
             model = models[model_name]
             model.fit(X_train, y_train)
             try:
-                score = model.score(X_test, y_test)
-                results[model_name].append(score)
-            except:
-                 results[model_name].append(np.nan) 
+                y_pred = model.predict(X_test)
+                
+                results[model_name]['R2'].append(r2_score(y_test, y_pred))
+                results[model_name]['RMSE'].append(np.sqrt(mean_squared_error(y_test, y_pred)))
+                results[model_name]['MAE'].append(mean_absolute_error(y_test, y_pred))
 
-    return (
-        np.nanmean(results["linear_minmax"]), 
-        np.nanmean(results["linear_pca"]), 
-        np.nanmean(results["ridge"]), 
-        np.nanmean(results["lasso"])
-    )
+            except:
+                 results[model_name]['R2'].append(np.nan) 
+                 results[model_name]['RMSE'].append(np.nan)
+                 results[model_name]['MAE'].append(np.nan)
+
+    return {
+        name: {
+            'R2': np.nanmean(results[name]['R2']),
+            'RMSE': np.nanmean(results[name]['RMSE']),
+            'MAE': np.nanmean(results[name]['MAE'])
+        } 
+        for name in models
+    }
 
 def train_sklearn_model(X_train, y_train, model_type='linear'):
     if model_type == 'linear':
@@ -101,7 +124,10 @@ def train_sklearn_model(X_train, y_train, model_type='linear'):
     elif model_type == 'ridge':
         model = Ridge(alpha=1.0) 
     elif model_type == 'lasso':
-        model = Lasso(alpha=0.1) 
+        model = Lasso(alpha=0.1)
+    elif model_type == 'elasticnet': 
+        model = ElasticNet(alpha=0.1, l1_ratio=0.5) 
+    
     model.fit(X_train, y_train)
     return model
 
@@ -134,8 +160,13 @@ def train_holtwinters_model(y_train, y_test):
         best_model = ExponentialSmoothing(y_train).fit()
 
     y_pred_hw = best_model.forecast(steps=len(y_test))
+    
     expected_r2 = r2_score(y_test, y_pred_hw)
-    return best_model, expected_r2
+    expected_rmse = np.sqrt(mean_squared_error(y_test, y_pred_hw))
+    expected_mae = mean_absolute_error(y_test, y_pred_hw)
+
+    return best_model, expected_r2, expected_rmse, expected_mae
+
 
 def train_arima_model(y_train, y_test):
     best_aic = float('inf')
@@ -164,9 +195,12 @@ def train_arima_model(y_train, y_test):
         best_model_fit = ARIMA(y_train, order=(1, 1, 1)).fit()
 
     y_pred_arima = best_model_fit.forecast(steps=len(y_test))
-    expected_r2 = r2_score(y_test, y_pred_arima)
     
-    return best_model_fit, expected_r2
+    expected_r2 = r2_score(y_test, y_pred_arima)
+    expected_rmse = np.sqrt(mean_squared_error(y_test, y_pred_arima))
+    expected_mae = mean_absolute_error(y_test, y_pred_arima)
+    
+    return best_model_fit, expected_r2, expected_rmse, expected_mae
 
 def preprocess_unseen_data(X_unseen, scaler_minmax, scaler_std, pca):
     X_unseen_scaled_minmax = scaler_minmax.transform(X_unseen)
@@ -180,31 +214,22 @@ def train_models(X_train_scaled, X_test_scaled,
                  y_train, y_test):
     
     model_scaled = train_sklearn_model(X_train_scaled, y_train, model_type='linear')
-    pred_scaled = model_scaled.predict(X_test_scaled)
-    r2_scaled = r2_score(y_test, pred_scaled)
-
     model_pca = train_sklearn_model(X_train_pca, y_train, model_type='linear')
-    pred_pca = model_pca.predict(X_test_pca)
-    r2_pca = r2_score(y_test, pred_pca)
-
     model_ridge = train_sklearn_model(X_train_scaled_std, y_train, model_type='ridge')
-    pred_ridge = model_ridge.predict(X_test_scaled_std)
-    r2_ridge = r2_score(y_test, pred_ridge)
-
     model_lasso = train_sklearn_model(X_train_scaled_std, y_train, model_type='lasso')
-    pred_lasso = model_lasso.predict(X_test_scaled_std)
-    r2_lasso = r2_score(y_test, pred_lasso)
-
-    model_hw, r2_hw = train_holtwinters_model(y_train, y_test)
-    model_arima, r2_arima = train_arima_model(y_train, y_test)
-
+    model_elasticnet = train_sklearn_model(X_train_scaled_std, y_train, model_type='elasticnet')
+    
+    model_hw, r2_hw, rmse_hw, mae_hw = train_holtwinters_model(y_train, y_test)
+    model_arima, r2_arima, rmse_arima, mae_arima = train_arima_model(y_train, y_test)
+    
     metrics = {
-        "Linear_Scaled_R2": r2_scaled,
-        "Linear_PCA_R2": r2_pca,
-        "Ridge_R2": r2_ridge,
-        "Lasso_R2": r2_lasso,
-        "HoltWinters_R2": r2_hw,
-        "ARIMA_R2": r2_arima
+        "1_Linear_MinMax": {"R2": r2_score(y_test, model_scaled.predict(X_test_scaled)), "RMSE": np.sqrt(mean_squared_error(y_test, model_scaled.predict(X_test_scaled))), "MAE": mean_absolute_error(y_test, model_scaled.predict(X_test_scaled))},
+        "2_Linear_PCA": {"R2": r2_score(y_test, model_pca.predict(X_test_pca)), "RMSE": np.sqrt(mean_squared_error(y_test, model_pca.predict(X_test_pca))), "MAE": mean_absolute_error(y_test, model_pca.predict(X_test_pca))},
+        "3_Ridge_L2": {"R2": r2_score(y_test, model_ridge.predict(X_test_scaled_std)), "RMSE": np.sqrt(mean_squared_error(y_test, model_ridge.predict(X_test_scaled_std))), "MAE": mean_absolute_error(y_test, model_ridge.predict(X_test_scaled_std))},
+        "4_Lasso_L1": {"R2": r2_score(y_test, model_lasso.predict(X_test_scaled_std)), "RMSE": np.sqrt(mean_squared_error(y_test, model_lasso.predict(X_test_scaled_std))), "MAE": mean_absolute_error(y_test, model_lasso.predict(X_test_scaled_std))},
+        "5_ElasticNet": {"R2": r2_score(y_test, model_elasticnet.predict(X_test_scaled_std)), "RMSE": np.sqrt(mean_squared_error(y_test, model_elasticnet.predict(X_test_scaled_std))), "MAE": mean_absolute_error(y_test, model_elasticnet.predict(X_test_scaled_std))}, # Adicionado
+        "6_HoltWinters": {"R2": r2_hw, "RMSE": rmse_hw, "MAE": mae_hw},
+        "7_ARIMA": {"R2": r2_arima, "RMSE": rmse_arima, "MAE": mae_arima}
     }
 
-    return model_scaled, model_pca, model_ridge, model_lasso, model_hw, model_arima, metrics
+    return model_scaled, model_pca, model_ridge, model_lasso, model_elasticnet, model_hw, model_arima, metrics
