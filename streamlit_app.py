@@ -1,5 +1,5 @@
 # ============================================================
-# STREAMLIT APP — Versão Final (Persistência de Estado)
+# STREAMLIT APP — Versão Final (Refinada sem PCA/MinMax)
 # ============================================================
 import streamlit as st
 import requests
@@ -19,35 +19,30 @@ st.set_page_config(
 )
 
 # URL da API (Backend)
-# IMPORTANTE: Use o localhost para teste local. Use a URL do Azure para deploy.
-# Se estiver testando localmente, mude para: API_URL = "http://localhost:8000"
+# IMPORTANTE: Se estiver rodando localmente o backend, mude para "http://localhost:8000"
 API_URL = "https://pi-fastapi-backend-eac6a6dfayh0hxgy.canadacentral-01.azurewebsites.net"
+# API_URL = "http://localhost:8000" # Descomente para teste local
 
 # -------------------------
 # FUNÇÃO DE LIMPEZA DE NOMES
 # -------------------------
 def format_model_name(technical_name):
-    """Transforma nomes técnicos feios em nomes comerciais bonitos.
-       Atualizado para 7 modelos e chaves do Backend."""
+    """Transforma nomes técnicos novos em nomes comerciais bonitos."""
     
     # Remove o prefixo 'predicted_' se houver
     name = technical_name.replace("predicted_", "")
     
     mapping = {
-        "1_Linear_MinMax": "Linear (MinMax)",
-        "2_Linear_PCA": "Linear (PCA)",
+        "1_Linear_Std": "Linear Regression (Standard)",
         "3_Ridge_L2": "Ridge Regression",
         "4_Lasso_L1": "Lasso Regression",
         "5_ElasticNet": "Elastic Net", 
         "6_HoltWinters": "Holt-Winters",
-        "7_ARIMA": "ARIMA",
-        # Inclui chaves antigas por segurança:
-        "3.Ridge_L2": "Ridge Regression",
-        "4.Lasso_L1": "Lasso Regression",
+        "7_ARIMA": "ARIMA"
     }
     
     if name in mapping: return mapping[name]
-    # Busca por parte do nome para lidar com os 'predicted_X_...'
+    # Busca por parte do nome para segurança
     for key, nice_name in mapping.items():
         if key in name: return nice_name
     return name
@@ -143,11 +138,11 @@ with st.sidebar:
 # -------------------------
 st.title("🧠 Projeto Integrador")
 st.markdown("""
-O **Projeto Integrador (PI)** foi desenvolvido com o propósito de unificar os conteúdos apresentados ao longo do semestre nas quatro disciplinas centrais:
-* **Computação em Nuvem** (Denis)
-* **Aprendizado Supervisionado** (Fernando)
-* **Séries Temporais** (Miro)
-* **Transformação, Compactação e Redução de Dados** (Thais)
+O **Projeto Integrador (PI)** unifica conceitos de:
+* **Computação em Nuvem**
+* **Aprendizado Supervisionado**
+* **Séries Temporais**
+* **Transformação e Compactação de Dados**
 """)
 st.markdown("---")
 
@@ -162,13 +157,12 @@ with col_train_info:
     <div class='info-card'>
         <h4>🔍 Processo de Treino</h4>
         <ul>
-            <li>Envio para API FastAPI.</li>
-            <li>Treino de <b>7 Modelos</b> na nuvem.</li>
+            <li>Treino de <b>6 Modelos</b> na nuvem.</li>
+            <li>Seleção automática do <b>Melhor Modelo</b>.</li>
             <li>Persistência no <b>Azure Blob Storage</b>.</li>
-            <li>Cálculo de <b>R² Esperado</b> (Validação Temporal).</li>
         </ul>
     </div>
-    """, unsafe_allow_html=True) # CORREÇÃO: Mudei de 6 para 7 Modelos
+    """, unsafe_allow_html=True)
 
 with col_train_action:
     train_file = st.file_uploader("📂 Upload da Base de Treino (.csv)", type=["csv"], key="train")
@@ -183,7 +177,7 @@ with col_train_action:
             if set(cols_needed).issubset(df_preview.columns):
                 if st.button("🚀 Iniciar Treinamento"):
                     train_file.seek(0)
-                    with st.spinner("Treinando modelos na nuvem..."):
+                    with st.spinner("Treinando e selecionando o melhor modelo..."):
                         try:
                             files = {"file": train_file}
                             response = requests.post(f"{API_URL}/train", files=files)
@@ -192,28 +186,31 @@ with col_train_action:
                             if response.status_code == 200:
                                 st.toast("Treino concluído!", icon="✅")
                                 
-                                # --- PROCESSAMENTO DOS DADOS (Full Metrics) ---
+                                # --- PROCESSAMENTO DOS DADOS ---
                                 full_metrics_data = result.get("full_expected_performance_metrics", {})
                                 
-                                # 1. Puxa o nome do vencedor do Ranking MCDA
+                                # 1. Puxa o nome do vencedor
                                 best_model_tech_name = full_metrics_data.pop("best_model_tech_name", None)
 
-                                # 2. Cria o DataFrame para exibição (apenas com as métricas)
+                                # 2. Cria o DataFrame
                                 clean_perf_dict = {format_model_name(k): v for k, v in full_metrics_data.items()}
                                 perf_df = pd.DataFrame.from_dict(clean_perf_dict, orient='index')
                                 perf_df.index.name = 'Modelo'
                                 
-                                # 3. Define o melhor modelo e R2
-                                if best_model_tech_name:
-                                     best_model = format_model_name(best_model_tech_name)
-                                     best_r2 = full_metrics_data[best_model_tech_name]["R2"]
-                                     perf_df = perf_df.sort_values(by="R2", ascending=False)
-                                else:
-                                     perf_df = perf_df.sort_values(by="R2", ascending=False)
-                                     best_model = perf_df['R2'].idxmax()
-                                     best_r2 = perf_df['R2'].max()
+                                # 3. Ordena pelo R2
+                                perf_df = perf_df.sort_values(by="R2", ascending=False)
                                 
-                                st.markdown("### 🏆 Resultado do Treinamento")
+                                best_model_nice = "Desconhecido"
+                                best_r2 = 0.0
+                                
+                                if best_model_tech_name and format_model_name(best_model_tech_name) in perf_df.index:
+                                     best_model_nice = format_model_name(best_model_tech_name)
+                                     best_r2 = perf_df.loc[best_model_nice, "R2"]
+                                else:
+                                     best_model_nice = perf_df.index[0]
+                                     best_r2 = perf_df.iloc[0]["R2"]
+                                
+                                st.markdown("### 🏆 Resultado: Melhor Modelo Selecionado")
                                 
                                 # --- LAYOUT 3 COLUNAS ---
                                 c1, c2, c3 = st.columns([1.2, 1.5, 2])
@@ -221,15 +218,14 @@ with col_train_action:
                                 with c1:
                                     st.markdown(f"""
                                     <div class='metric-card'>
-                                        <div class='metric-label'>Melhor Modelo</div>
-                                        <div class='metric-value'>{best_model}</div>
+                                        <div class='metric-label'>Vencedor</div>
+                                        <div class='metric-value'>{best_model_nice}</div>
                                         <div class='metric-desc'>{interpret_r2(best_r2)}<br>(R²: {best_r2:.4f})</div>
                                     </div>
                                     """, unsafe_allow_html=True)
                                 
                                 with c2:
                                     st.caption("Ranking Completo (R², RMSE, MAE)")
-                                    # CORREÇÃO: Removido 'column_format'
                                     st.dataframe(perf_df.style.format({"R2": "{:.4f}", "RMSE": "{:.4f}", "MAE": "{:.4f}"}), 
                                                  use_container_width=True, height=250) 
                                 
@@ -244,7 +240,7 @@ with col_train_action:
                                     ).properties(height=250)
                                     st.altair_chart(chart, use_container_width=True)
                                 
-                                st.session_state.history.append({"Hora": datetime.now().strftime("%H:%M"), "Ação": "Treino", "Status": "Sucesso (7 Modelos)"})
+                                st.session_state.history.append({"Hora": datetime.now().strftime("%H:%M"), "Ação": "Treino", "Status": f"Melhor: {best_model_nice}"})
                             else:
                                 st.error(f"Erro: {result.get('detail')}")
                         except Exception as e:
@@ -267,9 +263,8 @@ with col_test_info:
     <div class='info-card'>
         <h4>⚙️ Processo de Teste</h4>
         <ul>
-            <li>Download dos modelos do <b>Blob Storage</b>.</li>
+            <li>Usa <b>APENAS</b> o modelo vencedor do treino.</li>
             <li><b>Com Rótulos:</b> Gráfico Comparativo (Real vs Previsto).</li>
-            <li><b>Sem Rótulos:</b> Geração de arquivo.</li>
             <li>Entrega segura via <b>Huffman + XOR</b>.</li>
         </ul>
     </div>
@@ -285,7 +280,7 @@ with col_test_action:
     if test_file is not None:
         # Botão apenas dispara a API e salva na memória
         if st.button("⚡ Gerar Previsões"):
-            with st.spinner("Calculando..."):
+            with st.spinner("Aplicando melhor modelo..."):
                 try:
                     test_file.seek(0)
                     files = {"file": test_file}
@@ -306,11 +301,13 @@ with col_test_action:
             
             links = res.get("download_links", {})
             csv_url = f"{API_URL}{links.get('csv')}"
+            best_model_used = res.get("best_model_used", "Modelo")
+            best_model_nice_name = format_model_name(best_model_used)
 
             st.markdown("### 📦 Downloads")
             st.markdown(f"""
             <div>
-                <a href="{csv_url}" class="download-btn" target="_blank">📄 CSV</a>
+                <a href="{csv_url}" class="download-btn" target="_blank">📄 CSV ({best_model_nice_name})</a>
                 <a href="{API_URL}{links.get('huff')}" class="download-btn" target="_blank">🔒 .huff</a>
                 <a href="{API_URL}{links.get('freq')}" class="download-btn" target="_blank">🔑 Key</a>
             </div>
@@ -321,84 +318,43 @@ with col_test_action:
             try:
                 df_results = pd.read_csv(csv_url)
                 if 'true_time' in df_results.columns:
-                    st.markdown("### 📊 Real vs Previsto")
+                    st.markdown(f"### 📊 Real vs Previsto: {best_model_nice_name}")
                     
-                    # Preparação dos dados para o gráfico
+                    # Identifica a coluna de predição (agora só existe UMA)
                     pred_cols = [c for c in df_results.columns if c.startswith('predicted_')]
-                    col_map = {c: format_model_name(c) for c in pred_cols}
-                    reverse_map = {v: k for k, v in col_map.items()}
                     
-                    default_ix = 0
-                    if isinstance(perf_real, dict):
-                        # Puxa o R2 do modelo com melhor R2 para definir o modelo padrão do Selectbox
-                        perf_flat = {k: v["R2_Score"] for k, v in perf_real.items() if isinstance(v, dict) and "R2_Score" in v}
+                    if pred_cols:
+                        selected_col = pred_cols[0]
                         
-                        if perf_flat: # Garante que há dados de R2
-                            best_tech_name = max(perf_flat, key=perf_flat.get)
-                            for i, col in enumerate(pred_cols):
-                                if best_tech_name.split('_')[1] in col:
-                                    default_ix = i
-                                    break
+                        # Gráfico de Linha Simplificado (Sem Selectbox)
+                        chart_data = pd.DataFrame({
+                            'Índice': range(len(df_results)),
+                            'Real': df_results['true_time'],
+                            'Previsto': df_results[selected_col]
+                        })
+                        chart_long = chart_data.melt('Índice', var_name='Legenda', value_name='Valor')
                         
-                    selected_nice_name = st.selectbox(
-                        "Escolha o modelo para o Gráfico:", 
-                        list(col_map.values()), 
-                        index=default_ix
-                    )
-                    selected_col = reverse_map[selected_nice_name]
-                    
-                    # Gráfico de Linha (sem alteração)
-                    chart_data = pd.DataFrame({
-                        'Índice': range(len(df_results)),
-                        'Real': df_results['true_time'],
-                        f'Previsto ({selected_nice_name})': df_results[selected_col]
-                    })
-                    chart_long = chart_data.melt('Índice', var_name='Legenda', value_name='Valor')
-                    
-                    line_chart = alt.Chart(chart_long).mark_line(point=True).encode(
-                        x='Índice',
-                        y=alt.Y('Valor', scale=alt.Scale(zero=False)),
-                        color=alt.Color('Legenda', scale=alt.Scale(domain=['Real', f'Previsto ({selected_nice_name})'], range=['#10B981', '#3B82F6'])),
-                        tooltip=['Índice', 'Legenda', 'Valor']
-                    ).properties(height=350).interactive()
-                    st.altair_chart(line_chart, use_container_width=True)
+                        line_chart = alt.Chart(chart_long).mark_line(point=True).encode(
+                            x='Índice',
+                            y=alt.Y('Valor', scale=alt.Scale(zero=False)),
+                            color=alt.Color('Legenda', scale=alt.Scale(domain=['Real', 'Previsto'], range=['#10B981', '#3B82F6'])),
+                            tooltip=['Índice', 'Legenda', 'Valor']
+                        ).properties(height=350).interactive()
+                        st.altair_chart(line_chart, use_container_width=True)
 
-                    # Ranking de Barras e Tabela (Teste)
-                    if isinstance(perf_real, dict):
-                        
-                        # Processa para o DataFrame de métricas completo
-                        df_data = {}
-                        for tech_name, metrics in perf_real.items():
-                             nice_name = format_model_name(tech_name)
-                             # Garante que metrics é um dicionário antes de tentar o get
-                             if isinstance(metrics, dict):
-                                 df_data[nice_name] = {
-                                     'R2': metrics.get("R2_Score"),
-                                     'RMSE': metrics.get("RMSE"),
-                                     'MAE': metrics.get("MAE")
-                                 }
+                        # Exibe métricas do modelo único
+                        if isinstance(perf_real, dict) and best_model_used in perf_real:
+                            metrics = perf_real[best_model_used]
+                            st.markdown("##### 📝 Desempenho na Base de Teste")
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("R² Score", f"{metrics['R2_Score']:.4f}")
+                            c2.metric("RMSE", f"{metrics['RMSE']:.4f}")
+                            c3.metric("MAE", f"{metrics['MAE']:.4f}")
+                    else:
+                        st.warning("Coluna de predição não encontrada no CSV.")
 
-                        df_perf = pd.DataFrame.from_dict(df_data, orient='index')
-                        df_perf.index.name = 'Modelo'
-                        df_perf = df_perf.sort_values(by="R2", ascending=False)
-                        
-                        st.markdown("##### 📝 Desempenho Real (R², RMSE, MAE)")
-                        # CORREÇÃO: Removido 'column_format'
-                        st.dataframe(df_perf.style.format({"R2": "{:.4f}", "RMSE": "{:.4f}", "MAE": "{:.4f}"}), 
-                                     use_container_width=True, height=200) 
-                        
-                        # Prepara para o gráfico de barras (apenas R2)
-                        df_chart = df_perf.reset_index().rename(columns={'Modelo': 'Modelo'})
-                        
-                        bar_chart = alt.Chart(df_chart).mark_bar().encode(
-                            x=alt.X('R2', scale=alt.Scale(zero=False)),
-                            y=alt.Y('Modelo', sort='-x', title=""),
-                            color=alt.Color('R2', scale=alt.Scale(scheme='reds')),
-                            tooltip=['Modelo', 'R2']
-                        ).properties(height=200)
-                        st.altair_chart(bar_chart, use_container_width=True)
                 else:
-                    st.warning("⚠️ Gráfico indisponível (Arquivo sem gabarito).")
+                    st.info("ℹ️ Arquivo sem gabarito (sem coluna 'time'). Gráfico indisponível.")
             except Exception as e:
                 st.error(f"Erro visualização: {e}")
 

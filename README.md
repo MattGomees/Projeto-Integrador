@@ -1,150 +1,66 @@
-🧠 Laboratório de Modelos de Regressão e Séries Temporais
-Este repositório contém a solução desenvolvida para o Projeto Integrador do curso de Ciência de Dados e Inteligência Artificial da PUC-Campinas. O sistema é uma plataforma end-to-end para treinamento, persistência em nuvem e avaliação de modelos de regressão e séries temporais, com foco em segurança e compactação de dados.
+# 🧠 Laboratório de Modelos de Regressão e Séries Temporais
 
-🎯 Objetivo do Projeto
-O objetivo foi desenvolver uma aplicação capaz de prever eventos em séries temporais (coluna time) com base em 5 observações anteriores. O projeto integra conceitos de quatro disciplinas fundamentais:
+Este repositório contém a solução desenvolvida para o Projeto Integrador do curso de Ciência de Dados e Inteligência Artificial. O sistema é uma plataforma *end-to-end* para treinamento, seleção automática do melhor modelo e persistência em nuvem, com foco em segurança, robustez estatística e eficiência.
 
-Computação em Nuvem: Treinamento remoto e persistência de modelos (Azure Blob Storage).
+## 🎯 Objetivo do Projeto
 
-Aprendizado Supervisionado: Comparação de modelos de regressão (Linear, Ridge, Lasso).
+O objetivo foi desenvolver uma aplicação capaz de prever eventos em séries temporais (coluna `time`) com base em 5 observações anteriores. O projeto integra conceitos de quatro disciplinas fundamentais:
 
-Séries Temporais: Aplicação de modelos específicos (Holt-Winters, ARIMA).
+* **Computação em Nuvem:** Treinamento remoto, persistência de artefatos (Azure Blob Storage) e API RESTful.
+* **Aprendizado Supervisionado:** Comparação de modelos de regressão (Linear, Ridge, Lasso, ElasticNet).
+* **Séries Temporais:** Aplicação de modelos específicos (Holt-Winters, ARIMA) e validação cruzada temporal (`TimeSeriesSplit`).
+* **Transformação e Compactação de Dados:** Pipeline de pré-processamento estatístico e implementação de segurança (Huffman + Cifra XOR).
 
-Transformação e Compactação de Dados: Pipeline de pré-processamento e implementação manual de criptografia/compactação (Huffman + Cifra XOR).
+## 🚀 Funcionalidades Principais
 
-🚀 Funcionalidades Principais
-1. Treinamento em Nuvem
-Upload de arquivos .csv para treino.
+### 1. Treinamento Inteligente em Nuvem
+* **Upload** de arquivos `.csv` para treino.
+* **Pipeline de Pré-processamento Robusto:**
+    * **Padronização Estatística (`StandardScaler`):** Aplica transformação Z-score para alinhar a distribuição dos dados, garantindo convergência ótima para modelos lineares.
+    * **Prevenção de *Data Leakage*:** Durante a validação, os parâmetros de escala são ajustados exclusivamente dentro de cada "janela" de treino, simulando um cenário real de previsão.
+* **Treinamento Simultâneo de 6 Modelos:**
+    1.  Regressão Linear (Standard)
+    2.  Ridge Regression (Regularização L2)
+    3.  Lasso Regression (Regularização L1)
+    4.  Elastic Net (Híbrido L1+L2)
+    5.  Holt-Winters (Suavização Exponencial)
+    6.  ARIMA (AutoRegressive Integrated Moving Average)
+* **Seleção Automática (MCDA):** O sistema avalia os modelos via validação cruzada temporal e elege o "Vencedor" baseado em um ranking multicritério (Soma dos ranks de R², RMSE e MAE).
+* **Persistência Otimizada:** Apenas os artefatos necessários e a identificação do modelo vencedor são gerenciados no Azure Blob Storage.
 
-Pipeline automático de pré-processamento:
+### 2. Teste e Aplicação (*Best Model Strategy*)
+* **Eficiência Computacional:** Ao receber uma nova base de teste, o sistema carrega e executa **apenas o modelo vencedor** definido na etapa de treino. Isso reduz a latência e o consumo de memória.
+* **Avaliação Automática:** Se a base de teste contiver rótulos (gabarito), o sistema calcula as métricas de desempenho (R², RMSE, MAE) exclusivamente para o modelo campeão.
 
-Normalização (MinMax e StandardScaler).
+### 3. Segurança e Compactação (Ponta-a-Ponta)
+Implementação de um algoritmo híbrido de segurança nos arquivos de saída:
+* **Compactação:** Codificação de Huffman (baseada na frequência de caracteres do arquivo).
+* **Criptografia:** Cifra XOR aplicada sobre os dados binários compactados.
 
-Redução de dimensionalidade (PCA - 90% de variância).
+Os arquivos de saída são entregues ao usuário neste formato seguro (`.huff`), garantindo a integridade e confidencialidade no transporte.
 
-Treinamento simultâneo de 6 modelos:
+## 📂 Estrutura de Arquivos
 
-Regressão Linear (Dados Normalizados)
+Abaixo está a descrição dos principais arquivos e diretórios do projeto:
 
-Regressão Linear (com PCA)
+* **`app/main.py`**: API RESTful. Gerencia o ciclo de vida do treino, conexão com Azure e predição seletiva.
+* **`streamlit_app.py`**: Interface visual. Exibe os resultados e gráficos do modelo campeão.
+* **`app/model_utils.py`**: Lógica de Data Science (Pipeline de treino, Validação Temporal Rigorosa, StandardScaler).
+* **`app/security_utils.py`**: Implementação da compressão Huffman e criptografia XOR.
+* **`requirements.txt`**: Dependências do projeto.
 
-Ridge Regression (L2)
+---
 
-Lasso Regression (L1)
+## ⚙️ Instalação e Execução
 
-Holt-Winters (Suavização Exponencial)
+### Pré-requisitos
 
-ARIMA
+* **Python 3.9** ou superior.
+* Conta no **Microsoft Azure** (ou emulador Azurite local).
 
-Persistência dos artefatos (modelos e scalers) no Azure Blob Storage.
+### 1. Instalar dependências
 
-2. Teste e Predição
-Upload de base de teste (com ou sem rótulos).
+Execute o seguinte comando no terminal para instalar as bibliotecas necessárias:
 
-Geração de previsões utilizando os modelos salvos na nuvem.
-
-Avaliação Automática: Se a base contiver rótulos, o sistema calcula o R² Score e plota gráficos comparativos (Real vs Previsto).
-
-3. Segurança e Compactação (Ponta-a-Ponta)
-Implementação de um algoritmo híbrido de segurança:
-
-Compactação: Codificação de Huffman (baseada na frequência de caracteres).
-
-Criptografia: Cifra XOR aplicada sobre os dados binários compactados.
-
-Os arquivos de saída (resultados) são entregues ao usuário neste formato seguro (.huff), garantindo a integridade e confidencialidade no transporte.
-
-🛠️ Arquitetura da Solução
-A solução foi dividida em dois componentes principais (Frontend e Backend) seguindo a arquitetura de microsserviços:
-
-Snippet de código
-
-graph LR
-A[Usuário / Streamlit] -- Upload CSV --> B(FastAPI Backend)
-B -- Processamento ML --> C{Model Utils}
-C -- Salvar/Carregar --> D[(Azure Blob Storage)]
-B -- Segurança (Huffman+XOR) --> E{Security Utils}
-E -- Download (.huff) --> A
-Estrutura de Arquivos
-main.py: API RESTful construída com FastAPI. Gerencia rotas, treinamento e conexão com a Azure.
-
-streamlit_app.py: Interface visual interativa construída com Streamlit.
-
-model_utils.py: Módulo contendo a lógica de Data Science (Split, Scalers, PCA, Treino de Sklearn/Statsmodels).
-
-security_utils.py: Implementação customizada da compressão Huffman e criptografia XOR.
-
-requirements.txt: Dependências do projeto.
-
-⚙️ Instalação e Execução
-Pré-requisitos
-Python 3.9 ou superior.
-
-Conta no Microsoft Azure (ou emulador Azurite local).
-
-1. Clonar o repositório
-Bash
-
-git clone https://github.com/seu-usuario/nome-do-repo.git
-cd nome-do-repo
-2. Instalar dependências
-Bash
-
+```bash
 pip install -r requirements.txt
-3. Configurar Variáveis de Ambiente
-Crie um arquivo .env ou exporte a variável de conexão com o Azure Storage:
-
-Bash
-
-# Exemplo para Linux/Mac
-export AZURE_STORAGE_CONNECTION_STRING="sua_connection_string_aqui"
-
-# Exemplo para Windows (PowerShell)
-$env:AZURE_STORAGE_CONNECTION_STRING="sua_connection_string_aqui"
-Nota: Se a variável não for definida, o sistema tentará conectar no emulador local (Azurite).
-
-4. Executar a Aplicação
-O sistema requer que o Backend e o Frontend rodem simultaneamente. Abra dois terminais:
-
-Terminal 1 (Backend API):
-
-Bash
-
-uvicorn main:app --reload --port 8000
-Terminal 2 (Frontend Streamlit):
-
-Bash
-
-streamlit run streamlit_app.py
-Acesse a aplicação em: http://localhost:8501
-
-📊 Guia de Uso
-Painel de Controle: A barra lateral mostra o status da conexão com a API e Azure. Use o botão "Resetar sistema" para limpar modelos antigos da nuvem.
-
-Treinamento:
-
-Faça upload do arquivo train.csv.
-
-Clique em "Iniciar Treinamento".
-
-Analise o gráfico de ranking dos melhores modelos baseado no R² esperado.
-
-Predição:
-
-Faça upload do arquivo test.csv.
-
-O sistema baixará os modelos da nuvem e gerará as previsões.
-
-Download: Baixe os resultados em formato CSV ou formato seguro (.huff + chave).
-
-Visualização: Se o arquivo tiver gabarito, um gráfico interativo comparará a curva Real vs Prevista.
-
-👥 Autores
-Projeto desenvolvido pelos alunos de Ciência de Dados e IA (PUC-Campinas):
-
-Matheus Gomes (RA: 23004938)
-
-Maria Eduarda S. A. P. Costa (RA: 23005493)
-
-📝 Licença
-Este projeto está sob a licença MIT. Consulte o arquivo LICENSE para mais detalhes.
