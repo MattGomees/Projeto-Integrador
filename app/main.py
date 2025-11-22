@@ -125,7 +125,7 @@ async def train(file: UploadFile = File(...)):
             _save_artifact_to_blob(buf.read(), name)
 
         # --- SELEÇÃO DO MELHOR MODELO (MCDA) ---
-        X_raw = df.drop('time', axis=1)
+        X_raw = df[model_utils.FEATURES_ORDER] # Usa ordem explícita também aqui
         # Calcula performance esperada via Cross Validation Temporal
         expected_performance_sklearn = model_utils.get_expected_performance_sklearn(X_raw, y_full)
         
@@ -168,17 +168,45 @@ async def predict(file: UploadFile = File(...)):
             buffer.write(await file.read())
 
         df_raw = pd.read_csv(test_file_path)
-        has_labels = 'time' in df_raw.columns
-
+        
+        # Ordem oficial (deve ser idêntica ao model_utils.py)
         cols_needed = ['time-5', 'time-4', 'time-3', 'time-2', 'time-1']
+        
+        # --- BLINDAGEM 1: Verifica colunas ---
         if not set(cols_needed).issubset(df_raw.columns):
              raise HTTPException(status_code=400, detail=f"CSV deve conter as colunas de lag: {cols_needed}")
 
+        # --- BLINDAGEM 2: Tratamento de NaNs (Sujos) ---
+        if df_raw[cols_needed].isnull().values.any():
+            print("AVISO: NaNs encontrados no input. Aplicando ffill (Time Series).")
+            # 1. Forward Fill: preenche buracos com o valor anterior (lógica temporal)
+            df_raw[cols_needed] = df_raw[cols_needed].fillna(method='ffill')
+            # 2. Drop: se ainda tiver NaNs (ex: linha 1), remove para não quebrar o modelo
+            rows_before = len(df_raw)
+            df_raw = df_raw.dropna(subset=cols_needed)
+            rows_after = len(df_raw)
+            if rows_after < rows_before:
+                print(f"AVISO: {rows_before - rows_after} linhas irrecuperáveis removidas.")
+            
+            if len(df_raw) == 0:
+                raise HTTPException(status_code=400, detail="Arquivo contém apenas dados nulos ou inválidos.")
+        # -----------------------------------------------
+
+        has_labels = 'time' in df_raw.columns
+
         if has_labels:
-            df = model_utils.load_data(test_file_path)
-            X_unseen = df[cols_needed]
-            y_true = df['time'].values
+            # Reutiliza o df_raw já limpo para separar X e y
+            # BLINDAGEM 3: Força a ordem das colunas explicitamente
+            X_unseen = df_raw[cols_needed]
+            # Garante que 'time' também não tenha NaNs se for usado para validação
+            y_true = pd.to_numeric(df_raw['time'], errors='coerce')
+            
+            # Sincroniza índices caso o y tenha gerado novos NaNs
+            valid_idx = y_true.notna()
+            X_unseen = X_unseen[valid_idx]
+            y_true = y_true[valid_idx].values
         else:
+            # BLINDAGEM 3: Força a ordem das colunas explicitamente
             X_unseen = df_raw[cols_needed]
             y_true = None
 
@@ -201,7 +229,9 @@ async def predict(file: UploadFile = File(...)):
 
         # --- APLICAÇÃO DO MODELO ---
         # 1. Transformar dados novos com o Scaler treinado (Sem fit!)
+        # O X_unseen agora está garantidamente na ordem correta
         X_unseen_scaled = model_utils.preprocess_unseen_data(X_unseen, scaler)
+        
         # 2. Predição
         predictions = model.predict(X_unseen_scaled)
             
@@ -219,14 +249,14 @@ async def predict(file: UploadFile = File(...)):
         )
 
         performance_report = {}
-        if has_labels:
+        if has_labels and y_true is not None:
             performance_report[best_model_name] = {
                 "R2_Score": r2_score(y_true, predictions),
                 "RMSE": np.sqrt(mean_squared_error(y_true, predictions)),
                 "MAE": mean_absolute_error(y_true, predictions)
             }
         else:
-            performance_report = "Sem rótulos, avaliação não realizada."
+            performance_report = "Sem rótulos válidos, avaliação numérica não realizada."
 
         return {
             "status": "success",
@@ -243,6 +273,8 @@ async def predict(file: UploadFile = File(...)):
 
     except Exception as e:
         print(f"ERRO: {e}")
+        # import traceback
+        # traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro na predição: {str(e)}")
     finally:
         if os.path.exists(test_file_path): os.remove(test_file_path)

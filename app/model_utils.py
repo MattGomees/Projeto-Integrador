@@ -8,6 +8,9 @@ import warnings
 
 warnings.simplefilter('ignore', UserWarning)
 
+# Ordem oficial das features para garantir consistência matricial entre Treino e Teste
+FEATURES_ORDER = ['time-5', 'time-4', 'time-3', 'time-2', 'time-1']
+
 def load_data(file_path):
     df = pd.read_csv(file_path)
     if 'time' not in df.columns:
@@ -24,7 +27,10 @@ def preprocess_data(df, test_size=0.2):
     O conjunto de teste é apenas transformado usando os parâmetros aprendidos no treino.
     Isso evita Data Leakage (vazamento de dados futuros).
     """
-    X = df.drop('time', axis=1)
+    # --- ALTERAÇÃO DE SEGURANÇA: Ordem Explícita ---
+    # Em vez de drop('time'), selecionamos as colunas na ordem correta.
+    # Isso evita erros se o CSV vier com colunas trocadas.
+    X = df[FEATURES_ORDER]
     y = df['time']
     
     # Split sem embaralhar (Série Temporal)
