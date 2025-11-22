@@ -5,14 +5,8 @@ from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 import numpy as np
 import warnings
-from statsmodels.tools.sm_exceptions import ConvergenceWarning
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
-from statsmodels.tsa.arima.model import ARIMA
 
-warnings.simplefilter('ignore', ConvergenceWarning)
 warnings.simplefilter('ignore', UserWarning)
-
-# REMOVIDO: _winsorize_features (Causava distorção em séries temporais)
 
 def load_data(file_path):
     df = pd.read_csv(file_path)
@@ -25,7 +19,10 @@ def load_data(file_path):
 
 def preprocess_data(df, test_size=0.2):
     """
-    Aplica StandardScaler. Winsorization removida para preservar tendência.
+    Aplica StandardScaler. 
+    NOTA RIGOROSA: O fit (cálculo de média/desvio) é feito APENAS no conjunto de treino.
+    O conjunto de teste é apenas transformado usando os parâmetros aprendidos no treino.
+    Isso evita Data Leakage (vazamento de dados futuros).
     """
     X = df.drop('time', axis=1)
     y = df['time']
@@ -38,24 +35,25 @@ def preprocess_data(df, test_size=0.2):
     # Ajusta scaler APENAS no treino
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train_df)
+    
+    # Apenas transforma o teste (usando média/desvio do treino)
     X_test_scaled = scaler.transform(X_test_df)
 
-    # Prepara dados full para treino final (Ajusta scaler no dataset todo)
+    # Prepara dados full para treino final (Ajusta scaler no dataset todo para produção)
     scaler_full = StandardScaler()
     X_full_scaled = scaler_full.fit_transform(X)
 
-    # Retorna scaler_full para ser salvo e usado na produção
     return (
-        (X_train_scaled, X_test_scaled, scaler), # Scaler do split (não usado para salvar, só para validar se quisesse)
+        (X_train_scaled, X_test_scaled, scaler),
         (y_train, y_test),
         (X_full_scaled, y),
-        scaler_full # <--- IMPORTANTE: Retornamos o scaler treinado no FULL
+        scaler_full 
     )
 
 def get_expected_performance_sklearn(X_full_raw, y):
     """
-    Calcula performance esperada com validação cruzada rigorosa.
-    O Scaler é ajustado DENTRO de cada fold para evitar Data Leakage.
+    Calcula performance esperada com validação cruzada rigorosa (TimeSeriesSplit).
+    O Scaler é ajustado DENTRO de cada fold para garantir independência estatística.
     """
     tscv = TimeSeriesSplit(n_splits=5)
     
@@ -79,11 +77,10 @@ def get_expected_performance_sklearn(X_full_raw, y):
         # --- RIGOROSO: Fit do Scaler dentro do Fold ---
         scaler_fold = StandardScaler()
         X_train_fold_scaled = scaler_fold.fit_transform(X_train_fold)
-        X_test_fold_scaled = scaler_fold.transform(X_test_fold)
+        X_test_fold_scaled = scaler_fold.transform(X_test_fold) # Apenas transform
         # ----------------------------------------------
 
         for model_name, model in models.items():
-            # Clona o modelo para garantir que está limpo
             from sklearn.base import clone
             clf = clone(model)
             
@@ -91,7 +88,6 @@ def get_expected_performance_sklearn(X_full_raw, y):
             try:
                 y_pred = clf.predict(X_test_fold_scaled)
                 
-                # Cálculo seguro das métricas
                 r2 = r2_score(y_test_fold, y_pred)
                 rmse = np.sqrt(mean_squared_error(y_test_fold, y_pred))
                 mae = mean_absolute_error(y_test_fold, y_pred)
@@ -126,102 +122,23 @@ def train_sklearn_model(X_train_scaled, y_train, model_type='linear'):
     model.fit(X_train_scaled, y_train)
     return model
 
-def train_holtwinters_model(y_train, y_test):
-    best_aic = float('inf')
-    best_model = None
-    configs = [
-        {'trend': 'add', 'seasonal': None},
-        {'trend': 'add', 'seasonal': 'add', 'seasonal_periods': 5},
-        {'trend': None, 'seasonal': 'add', 'seasonal_periods': 5}
-    ]
-    
-    # Garante que índice é numérico/range para evitar erros do statsmodels
-    y_train_reset = y_train.reset_index(drop=True)
-    
-    for config in configs:
-        try:
-            model = ExponentialSmoothing(
-                y_train_reset, 
-                trend=config.get('trend'), 
-                seasonal=config.get('seasonal'), 
-                seasonal_periods=config.get('seasonal_periods')
-            ).fit()
-            if model.aic < best_aic:
-                best_aic = model.aic
-                best_model = model
-        except:
-            continue
-    if best_model is None:
-        best_model = ExponentialSmoothing(y_train_reset).fit()
-    
-    steps = len(y_test) if len(y_test) > 0 else 1
-    y_pred_hw = best_model.forecast(steps=steps)
-    
-    if len(y_test) > 0:
-        expected_r2 = r2_score(y_test, y_pred_hw)
-        expected_rmse = np.sqrt(mean_squared_error(y_test, y_pred_hw))
-        expected_mae = mean_absolute_error(y_test, y_pred_hw)
-    else:
-        expected_r2, expected_rmse, expected_mae = 0, 0, 0
-
-    return best_model, expected_r2, expected_rmse, expected_mae
-
-def train_arima_model(y_train, y_test):
-    best_aic = float('inf')
-    best_model_fit = None
-    # Grid reduzido para performance e robustez
-    p_values = [1, 2]
-    d_values = [0, 1]
-    q_values = [0, 1]
-    
-    y_train_reset = y_train.reset_index(drop=True)
-
-    for p in p_values:
-        for d in d_values:
-            for q in q_values:
-                try:
-                    model = ARIMA(y_train_reset, order=(p, d, q))
-                    model_fit = model.fit()
-                    if model_fit.aic < best_aic:
-                        best_aic = model_fit.aic
-                        best_model_fit = model_fit
-                except:
-                    continue
-    if best_model_fit is None:
-        best_model_fit = ARIMA(y_train_reset, order=(1, 1, 1)).fit()
-
-    steps = len(y_test) if len(y_test) > 0 else 1
-    y_pred_arima = best_model_fit.forecast(steps=steps)
-    
-    if len(y_test) > 0:
-        expected_r2 = r2_score(y_test, y_pred_arima)
-        expected_rmse = np.sqrt(mean_squared_error(y_test, y_pred_arima))
-        expected_mae = mean_absolute_error(y_test, y_pred_arima)
-    else:
-        expected_r2, expected_rmse, expected_mae = 0, 0, 0
-    
-    return best_model_fit, expected_r2, expected_rmse, expected_mae
-
 def preprocess_unseen_data(X_unseen, scaler):
+    # IMPORTANTE: Nunca fazemos fit aqui. Apenas transform.
     X_unseen_scaled = scaler.transform(X_unseen)
     return X_unseen_scaled
 
 def train_models(X_train_scaled, X_test_scaled, y_train, y_test):
+    # Treina apenas os modelos lineares solicitados e compatíveis com a estrutura de input
     model_linear = train_sklearn_model(X_train_scaled, y_train, model_type='linear')
     model_ridge = train_sklearn_model(X_train_scaled, y_train, model_type='ridge')
     model_lasso = train_sklearn_model(X_train_scaled, y_train, model_type='lasso')
     model_elasticnet = train_sklearn_model(X_train_scaled, y_train, model_type='elasticnet')
-    
-    model_hw, r2_hw, rmse_hw, mae_hw = train_holtwinters_model(y_train, y_test)
-    model_arima, r2_arima, rmse_arima, mae_arima = train_arima_model(y_train, y_test)
     
     metrics = {
         "1_Linear_Std": {"R2": r2_score(y_test, model_linear.predict(X_test_scaled)), "RMSE": np.sqrt(mean_squared_error(y_test, model_linear.predict(X_test_scaled))), "MAE": mean_absolute_error(y_test, model_linear.predict(X_test_scaled))},
         "3_Ridge_L2": {"R2": r2_score(y_test, model_ridge.predict(X_test_scaled)), "RMSE": np.sqrt(mean_squared_error(y_test, model_ridge.predict(X_test_scaled))), "MAE": mean_absolute_error(y_test, model_ridge.predict(X_test_scaled))},
         "4_Lasso_L1": {"R2": r2_score(y_test, model_lasso.predict(X_test_scaled)), "RMSE": np.sqrt(mean_squared_error(y_test, model_lasso.predict(X_test_scaled))), "MAE": mean_absolute_error(y_test, model_lasso.predict(X_test_scaled))},
         "5_ElasticNet": {"R2": r2_score(y_test, model_elasticnet.predict(X_test_scaled)), "RMSE": np.sqrt(mean_squared_error(y_test, model_elasticnet.predict(X_test_scaled))), "MAE": mean_absolute_error(y_test, model_elasticnet.predict(X_test_scaled))},
-        "6_HoltWinters": {"R2": r2_hw, "RMSE": rmse_hw, "MAE": mae_hw},
-        "7_ARIMA": {"R2": r2_arima, "RMSE": rmse_arima, "MAE": mae_arima}
     }
 
-    return model_linear, model_ridge, model_lasso, model_elasticnet, model_hw, model_arima, metrics
+    return model_linear, model_ridge, model_lasso, model_elasticnet, metrics

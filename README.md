@@ -13,54 +13,27 @@ O objetivo foi desenvolver uma aplicação capaz de prever eventos em séries te
 
 ## 🚀 Funcionalidades Principais
 
+## 🚀 Funcionalidades Principais
+
 ### 1. Treinamento Inteligente em Nuvem
 * **Upload** de arquivos `.csv` para treino.
 * **Pipeline de Pré-processamento Robusto:**
-    * **Padronização Estatística (`StandardScaler`):** Aplica transformação Z-score para alinhar a distribuição dos dados, garantindo convergência ótima para modelos lineares.
-    * **Prevenção de *Data Leakage*:** Durante a validação, os parâmetros de escala são ajustados exclusivamente dentro de cada "janela" de treino, simulando um cenário real de previsão.
-* **Treinamento Simultâneo de 6 Modelos:**
+    * **Padronização Estatística (`StandardScaler`):** * **IMPORTANTE:** O Scaler é ajustado (`fit`) **apenas** nos dados de treino para aprender a média e desvio padrão. 
+        * Durante o teste ou produção, utilizamos esses mesmos parâmetros para apenas transformar (`transform`) os novos dados. Isso garante que não haja *Data Leakage* (contaminação pelo futuro).
+    * **Validação Cruzada Temporal:** Utilização de `TimeSeriesSplit` para respeitar a ordem cronológica dos dados durante a validação.
+* **Treinamento Simultâneo de 4 Modelos Lineares:**
     1.  Regressão Linear (Standard)
     2.  Ridge Regression (Regularização L2)
     3.  Lasso Regression (Regularização L1)
     4.  Elastic Net (Híbrido L1+L2)
-    5.  Holt-Winters (Suavização Exponencial)
-    6.  ARIMA (AutoRegressive Integrated Moving Average)
-* **Seleção Automática (MCDA):** O sistema avalia os modelos via validação cruzada temporal e elege o "Vencedor" baseado em um ranking multicritério (Soma dos ranks de R², RMSE e MAE).
-* **Persistência Otimizada:** Apenas os artefatos necessários e a identificação do modelo vencedor são gerenciados no Azure Blob Storage.
+* **Seleção Automática (MCDA):** O sistema avalia os modelos e elege o "Vencedor" baseado em um ranking multicritério (R², RMSE e MAE).
 
 ### 2. Teste e Aplicação (*Best Model Strategy*)
-* **Eficiência Computacional:** Ao receber uma nova base de teste, o sistema carrega e executa **apenas o modelo vencedor** definido na etapa de treino. Isso reduz a latência e o consumo de memória.
-* **Avaliação Automática:** Se a base de teste contiver rótulos (gabarito), o sistema calcula as métricas de desempenho (R², RMSE, MAE) exclusivamente para o modelo campeão.
-
-### 3. Segurança e Compactação (Ponta-a-Ponta)
-Implementação de um algoritmo híbrido de segurança nos arquivos de saída:
-* **Compactação:** Codificação de Huffman (baseada na frequência de caracteres do arquivo).
-* **Criptografia:** Cifra XOR aplicada sobre os dados binários compactados.
-
-Os arquivos de saída são entregues ao usuário neste formato seguro (`.huff`), garantindo a integridade e confidencialidade no transporte.
+* **Eficiência Computacional:** Ao receber uma nova base de teste, o sistema carrega e executa **apenas o modelo vencedor**.
+* **Segurança e Compactação:** Os arquivos de saída são entregues criptografados e compactados (Huffman + XOR).
 
 ## 📂 Estrutura de Arquivos
-
-Abaixo está a descrição dos principais arquivos e diretórios do projeto:
-
-* **`app/main.py`**: API RESTful. Gerencia o ciclo de vida do treino, conexão com Azure e predição seletiva.
-* **`streamlit_app.py`**: Interface visual. Exibe os resultados e gráficos do modelo campeão.
-* **`app/model_utils.py`**: Lógica de Data Science (Pipeline de treino, Validação Temporal Rigorosa, StandardScaler).
-* **`app/security_utils.py`**: Implementação da compressão Huffman e criptografia XOR.
-* **`requirements.txt`**: Dependências do projeto.
-
----
-
-## ⚙️ Instalação e Execução
-
-### Pré-requisitos
-
-* **Python 3.9** ou superior.
-* Conta no **Microsoft Azure** (ou emulador Azurite local).
-
-### 1. Instalar dependências
-
-Execute o seguinte comando no terminal para instalar as bibliotecas necessárias:
-
-```bash
-pip install -r requirements.txt
+* **`app/main.py`**: API RESTful e gerenciamento de modelos.
+* **`app/model_utils.py`**: Pipeline de Ciência de Dados (Scaler e Modelos scikit-learn).
+* **`app/security_utils.py`**: Algoritmos de segurança (Huffman + XOR).
+* **`requirements.txt`**: Dependências limpas (sem bibliotecas pesadas desnecessárias).

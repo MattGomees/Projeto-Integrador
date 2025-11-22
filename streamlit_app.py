@@ -29,22 +29,16 @@ API_URL = "https://pi-fastapi-backend-eac6a6dfayh0hxgy.canadacentral-01.azureweb
 def format_model_name(technical_name):
     """Transforma nomes técnicos novos em nomes comerciais bonitos."""
     
-    # Remove o prefixo 'predicted_' se houver
     name = technical_name.replace("predicted_", "")
     
     mapping = {
         "1_Linear_Std": "Linear Regression (Standard)",
         "3_Ridge_L2": "Ridge Regression",
         "4_Lasso_L1": "Lasso Regression",
-        "5_ElasticNet": "Elastic Net", 
-        "6_HoltWinters": "Holt-Winters",
-        "7_ARIMA": "ARIMA"
+        "5_ElasticNet": "Elastic Net"
     }
     
     if name in mapping: return mapping[name]
-    # Busca por parte do nome para segurança
-    for key, nice_name in mapping.items():
-        if key in name: return nice_name
     return name
 
 def interpret_r2(value):
@@ -157,7 +151,7 @@ with col_train_info:
     <div class='info-card'>
         <h4>🔍 Processo de Treino</h4>
         <ul>
-            <li>Treino de <b>6 Modelos</b> na nuvem.</li>
+            <li>Treino de <b>4 Modelos Lineares</b> na nuvem.</li>
             <li>Seleção automática do <b>Melhor Modelo</b>.</li>
             <li>Persistência no <b>Azure Blob Storage</b>.</li>
         </ul>
